@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <title>แมวระเบิด - เล่นเกม</title>
+  <link rel="stylesheet" href="/css/animations.css" />
+</head>
+<body>
+
+<h2 id="roomCode"></h2>
+
+<button id="startGame" style="display:none;">🎮 เริ่มเกม</button>
+
+<div id="players"></div>
+
+<hr />
+
+<div id="attackStatus"></div>
+
+<div id="actionControls">
+    <button id="draw">🃏 จั่วการ์ด</button>
+    <button id="confirmPlay" class="hidden">✅ ใช้การ์ดที่เลือก</button>
+    <button id="cancelSelect" class="hidden">❌ ยกเลิก</button>
+</div>
+
+<div id="deckCount"></div>
+
+<hr />
+
+<h3>📜 Log เกม</h3>
+<div id="gameLog" class="game-log"></div>
+
+<hr />
+
+<button id="nopeBtn" style="display:none;">❌ Nope</button>
+<div id="nopeCountdown" class="nope-countdown"></div>
+
+<hr />
+
+<h3>การ์ดในมือ</h3>
+
+<div id="hand"></div>
+
+<!-- GAME OVER -->
+<div id="gameOverScreen" class="game-over hidden">
+  <div class="game-over-box">
+    <h1 id="gameOverTitle"></h1>
+    <button id="restartGameBtn">🔄 เล่นใหม่</button>
+    <button onclick="location.href='/'">🏠 กลับ Lobby</button>
+  </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="/js/socket.js"></script>
+<script src="/js/game.js"></script>
+
+<div id="popupOverlay" class="popup-overlay hidden">
+  <div class="popup-box">
+    <h3 id="popupTitle"></h3>
+    <div id="popupContent"></div>
+    <button onclick="closePopup()">ยกเลิก</button>
+  </div>
+</div>
+
+</body>
+</html>
