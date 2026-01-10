@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>แมวระเบิด - Battle</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0; padding: 0;
+            background-color: #1a1a1a; color: white;
+            height: 100vh; display: flex; flex-direction: column; overflow: hidden;
+        }
+
+        .game-header { background: #2d2d2d; padding: 15px; text-align: center; border-bottom: 2px solid #444; }
+        #roomCode { font-size: 1.2rem; font-weight: bold; color: #ff4757; margin-bottom: 5px; }
+        #players { font-size: 0.9rem; color: #ccc; }
+
+        .game-board { flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 20px; }
+        .deck-box { background: #333; padding: 15px; border-radius: 5px; border: 3px dashed #555; font-size: 1.0rem; }
+        .action-group { display: flex; gap: 5 px; }
+
+        .player-hand-area { background: #252525; padding: 15px; border-radius: 20px 20px 0 0; min-height: 180px; }
+        .hand-label { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; font-size: 0.9rem; }
+        #hand { display: flex; overflow-x: auto; gap: 10px; padding-bottom: 10px; min-height: 100px; }
+
+        button { padding: 12px 20px; border-radius: 8px; border: none; font-weight: bold; cursor: pointer; transition: 0.2s; }
+        #startGame { background-color: #2ed573; color: white; }
+        #draw { background-color: #ff7f50; color: white; min-width: 150px; }
+        #draw:disabled { background-color: #555; color: #888; }
+        #confirmPlay { background-color: #1e90ff; color: white; }
+        .hidden { display: none !important; }
+
+        .card-button {
+            flex: 0 0 90px; height: 130px; background: white; border-radius: 10px;
+            color: black; display: flex; flex-direction: column; align-items: center;
+            justify-content: center; border: 4px solid transparent; padding: 5px;
+        }
+        .card-button img { width: 100%; height: auto; margin-bottom: 5px; }
+        .card-button.selected { border-color: #2ed573; transform: translateY(-10px); }
+
+        #gameOverScreen {
+            position: fixed; inset: 0; background: rgba(0,0,0,0.9);
+            display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 1000;
+        }
+
+        /* Modal สำหรับเลือกเป้าหมาย */
+        .target-modal {
+            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            background: #333; padding: 20px; border-radius: 15px; border: 2px solid #ff4757; z-index: 2000;
+        }
+        .target-list { display: flex; flex-direction: column; gap: 10px; margin-top: 15px; }
+        .target-item { background: #444; padding: 10px; border-radius: 8px; cursor: pointer; text-align: center; }
+        .target-item:hover { background: #555; }
+    </style>
+</head>
+<body>
+
+    <header class="game-header">
+        <div id="roomCode">รหัสห้อง: --</div>
+        <div id="players">กำลังโหลดรายชื่อ...</div>
+    </header>
+
+    <main class="game-board">
+        <div class="deck-box">
+            <span id="deckCount">🂠 เหลือ 0 ใบ</span>
+        </div>
+        <div id="gameLog" class="game-log"></div>
+        <div id="nopeCountdown" style="color: #ff4757; font-weight: bold;"></div>
+        
+        <div class="action-group">
+            <button id="startGame" class="hidden">เริ่มเกม</button>
+            <button id="draw" disabled>จั่วการ์ด</button>
+               
+    <div class="nope-box">
+        <div id="nopeOverlay" class="hidden">
+        <h3 id="nopeTitle">กำลังใช้การ์ด...</h3>
+        <div class="timer-bar-container">
+            <div id="timerBar"></div>
+        </div>
+        <p>คุณจะใช้ "ม่าย" (Nope) หรือไม่?</p>
+         <button id="nopeBtn" class="hidden" style="bottom: 200px; right: 20px; z-index: 500; background: #ff4757; color: white;">❌ NOPE!</button>
+    </div>
+     </div>
+</div>
+        </div>
+    </main>
+
+    <footer class="player-hand-area">
+        <div class="hand-label">
+            <span>ไพ่ในมือของคุณ</span>
+            <button id="confirmPlay" class="hidden">ยืนยันการใช้ไพ่</button>
+        </div>
+        <div style="text-align: right; padding: 0 10px;">
+    <button id="sortHand" class="btn-sort">⇅ จัดเรียงไพ่</button>
+</div>
+<div id="hand">...</div>
+        <div id="hand"></div>
+ 
+    </footer>
+
+    
+   
+
+    <div id="gameOverScreen" class="hidden">
+        <h1 id="gameOverTitle">🎉 ผู้ชนะคือ...</h1>
+        <button onclick="location.href='/'" style="background: white; color: black;">กลับหน้าหลัก</button>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="/js/game.js"></script>
+ <style>/* หน้าต่างแจ้งเตือนระเบิด */
+ .modal-content {
+    background: #2d2d2d;
+    width: 90%;
+    max-width: 380px;
+    max-height: 70vh; /* บังคับให้สูงไม่เกิน 70% ของหน้าจอ */
+    display: flex;
+    flex-direction: column;
+    padding: 20px;
+    border-radius: 15px;
+}
+
+.modal-overlay {
+    position: fixed;
+    top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(0,0,0,0.85);
+    display: flex; justify-content: center; align-items: center;
+    z-index: 9999;
+}
+
+.bomb-modal {
+    background: #2d2d2d;
+    padding: 25px;
+    border-radius: 20px;
+    border: 4px solid #ff4757;
+    text-align: center;
+    max-width: 300px;
+    box-shadow: 0 0 30px rgba(255, 71, 87, 0.5);
+}
+
+.bomb-modal h2 { color: #ff4757; margin-top: 0; }
+
+.defuse-btn {
+    background: #2ed573;
+    color: white;
+    font-size: 1.2rem;
+    padding: 15px 30px;
+    margin-top: 15px;
+    width: 100%;
+/* กริตแสดงการ์ดขนาดเล็ก */
+.picker-grid-small {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(65px, 1fr)); /* ขนาดเล็กลง */
+    gap: 8px;
+    max-height: 250px; /* จำกัดความสูงถ้าการ์ดเยอะให้ Scroll แทน */
+    overflow-y: auto;
+    padding: 10px;
+    background: #1a1a1a;
+    border-radius: 8px;
+}
+
+/* ไอเทมการ์ดแต่ละใบ */
+.card-item-picker-small {
+    cursor: pointer;
+    text-align: center;
+    background: #333;
+    padding: 5px;
+    border-radius: 6px;
+    transition: transform 0.1s;
+    border: 1px solid #444;
+}
+
+.card-item-picker-small:hover {
+    background: #444;
+    transform: scale(1.05);
+}
+
+.card-item-picker-small img {
+    width: 100%; /* กว้างตามกริตที่กำหนดไว้ (65px) */
+    height: auto;
+    border-radius: 4px;
+}
+
+.card-name-small {
+    font-size: 9px; /* ตัวหนังสือขนาดจิ๋ว */
+    display: block;
+    margin-top: 3px;
+    color: #eee;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+}</style>   
+</body>
+</html>
