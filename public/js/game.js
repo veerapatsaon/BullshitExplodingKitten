@@ -112,7 +112,7 @@ socket.on("state", (roomState) => {
             document.getElementById("nopeTitle").innerText = `⏳ กำลังใช้: ${action.card}`;
             
             // ปรับความยาวแถบเวลา (คิดเป็น %)
-            const percent = (timeLeft / 3000) * 100;
+            const percent = (timeLeft / 7000) * 100;
             timerBar.style.width = percent + "%";
 
             // แสดงปุ่ม Nope เฉพาะคนที่มีการ์ด "ม่าย" และไม่ใช่เจ้าของตา
@@ -648,4 +648,5 @@ document.getElementById("sortHand").onclick = () => {
     // 4. สั่งวาดไพ่ใหม่
     renderHand(lastState);
     validateSelection(lastState);
+
 };
