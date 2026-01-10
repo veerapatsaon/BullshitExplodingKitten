@@ -1,0 +1,651 @@
+const socket = io();
+const params = new URLSearchParams(location.search);
+const room = params.get("code");
+const clientId = params.get("clientId") || localStorage.getItem("clientId");
+const playerName = sessionStorage.getItem("playerName") || "ผู้เล่นไร้นาม";
+
+// ตรวจสอบข้อมูลเบื้องต้น
+if (!room || !clientId) {
+    alert("ข้อมูลไม่ครบถ้วน กำลังกลับหน้าหลัก...");
+    location.href = "/";
+}
+
+// ส่งสัญญาณเข้าร่วมห้อง
+socket.emit("joinRoom", { code: room, name: playerName, clientId: clientId });
+
+let lastState = null;
+let selectedCardsIdx = [];
+let myLocalHand = []; // เก็บชื่อการ์ดตามลำดับที่เราจัดไว้
+
+/* ===== DOM ELEMENTS ===== */
+const roomCodeEl = document.getElementById("roomCode");
+const playersEl = document.getElementById("players");
+const startBtn = document.getElementById("startGame");
+const drawBtn = document.getElementById("draw");
+const handEl = document.getElementById("hand");
+const deckEl = document.getElementById("deckCount");
+const logEl = document.getElementById("gameLog");
+
+const elements = {
+    confirmPlay: document.getElementById("confirmPlay"),
+    drawBtn: document.getElementById("draw"),
+    nopeBtn: document.getElementById("nopeBtn")
+};
+
+/* ===== MAIN STATE LISTENER ===== */
+socket.on("state", (roomState) => {
+    if (!roomState) return;
+    lastState = roomState; // เก็บข้อมูลไว้ใช้ในฟังก์ชันอื่นๆ
+
+
+    // 1. อัปเดตรหัสห้องและรายชื่อผู้เล่น
+    roomCodeEl.innerText = "รหัสห้อง: " + (roomState.code || room);
+    playersEl.innerHTML = "ผู้เล่น: " + roomState.players.map(p => {
+        let name = p.name;
+        if (p.clientId === roomState.hostClientId) name = "👑 " + name;
+        // ✅ ถ้าตายให้ขีดฆ่าชื่อ
+    if (!p.alive) {
+        return `<span style="text-decoration:line-through; color:gray;">💀 ${name}</span>`;
+    }
+    
+    // ✅ ถ้าเป็นตาปัจจุบันให้ใส่ไฮไลท์
+    const isCurrentTurn = roomState.players[roomState.turn]?.clientId === p.clientId;
+    if (isCurrentTurn && roomState.started) {
+        return `<strong style="color:#2ed573; text-shadow: 0 0 5px #2ed573;">▶ ${name}</strong>`;
+    }
+    
+    return name;
+}).join(" , ");
+
+    // 2. แสดง Log เกม (ต้องอยู่ภายในนี้เพื่อให้รู้จัก roomState)
+    if (logEl && roomState.logs) {
+        logEl.innerHTML = ""; 
+        // ใช้ .slice(-10) เพื่อเอาเฉพาะ 10 ข้อมูลล่าสุดจาก Array
+    const latestLogs = roomState.logs.slice(-8); 
+    
+    latestLogs.forEach(l => {
+        const div = document.createElement("div");
+        div.className = `log log-${l.kind || 'system'}`;
+        div.innerHTML = `<small style="color:gray;">${l.time || ''}</small> ${l.text}`;
+        logEl.appendChild(div);
+    });
+        logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    // 3. จัดการปุ่ม Start สำหรับ Host
+    const isHost = roomState.hostClientId === clientId;
+    if (isHost && !roomState.started) {
+        startBtn.classList.remove("hidden");
+    } else {
+        startBtn.classList.add("hidden");
+    }
+
+    // 4. จัดการปุ่มจั่วไพ่
+    const isMyTurn = roomState.players[roomState.turn]?.clientId === clientId;
+    if (!roomState.started) {
+        drawBtn.disabled = true;
+        drawBtn.innerText = "รอเริ่มเกม...";
+    } else {
+        drawBtn.disabled = !isMyTurn || !!roomState.pendingAction;
+        drawBtn.innerText = isMyTurn ? "จั่วการ์ด" : `ตาของ ${roomState.players[roomState.turn].name}`;
+        deckEl.innerText = `🂠 เหลือ ${roomState.deck.length} ใบ`;
+    }
+
+    // 5. วาดไพ่บนมือ
+    renderHand(roomState);
+    validateSelection(roomState);
+    /* ===== BOMB LOGIC ===== */
+socket.on("state", (roomState) => {
+    // ... โค้ดเดิมของคุณ ...
+
+    /* ===== NOPE TIMER LOGIC ===== */
+    const nopeOverlay = document.getElementById("nopeOverlay");
+    const nopeBtn = document.getElementById("nopeBtn");
+    const timerBar = document.getElementById("timerBar");
+
+    if (roomState.pendingAction) {
+        const action = roomState.pendingAction;
+        const timeLeft = action.endAt - Date.now();
+
+        if (timeLeft > 0) {
+            nopeOverlay.classList.remove("hidden");
+            document.getElementById("nopeTitle").innerText = `⏳ กำลังใช้: ${action.card}`;
+            
+            // ปรับความยาวแถบเวลา (คิดเป็น %)
+            const percent = (timeLeft / 3000) * 100;
+            timerBar.style.width = percent + "%";
+
+            // แสดงปุ่ม Nope เฉพาะคนที่มีการ์ด "ม่าย" และไม่ใช่เจ้าของตา
+            const me = roomState.players.find(p => p.clientId === clientId);
+            const hasNope = me?.hand.includes("ม่าย");
+            const isNotActor = action.playerClientId !== clientId;
+
+            if (hasNope && isNotActor && me.alive) {
+                nopeBtn.classList.remove("hidden");
+            } else {
+                nopeBtn.classList.add("hidden");
+            }
+        }
+    } else {
+        // ถ้าไม่มี Action ค้างอยู่ ให้ซ่อน Overlay
+        nopeOverlay.classList.add("hidden");
+        nopeBtn.classList.add("hidden");
+    }
+});
+
+});
+
+// 1. เมื่อจั่วเจอระเบิด และต้องกด "แก้ระเบิด"
+/* ===== 2. BOMB LOGIC (แยกออกมาข้างนอก) ===== */
+socket.on("showDefusePrompt", () => {
+    if (document.getElementById("defuseModal")) return; // กันเด้งซ้ำ
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    overlay.id = "defuseModal";
+    overlay.innerHTML = `
+        <div class="bomb-modal">
+            <h2>💣 เจอระเบิด!</h2>
+            <button class="defuse-btn" onclick="useDefuse()">ใช้การ์ดแก้ระเบิด</button>
+        </div>`;
+    document.body.appendChild(overlay);
+});
+
+window.useDefuse = () => {
+    socket.emit("defuseBomb", room);
+    const modal = document.getElementById("defuseModal");
+    if (modal) modal.remove();
+};
+
+socket.on("chooseBombPosition", (maxPosition) => {
+    let pos = prompt(`🛡️ แก้สำเร็จ! วางคืนตรงไหน? (0-${maxPosition})`, "0");
+    socket.emit("placeBomb", { code: room, position: parseInt(pos) || 0 });
+});
+
+/* ===== ดูอนาคต (See the Future) ===== */
+socket.on("futureCards", (cards) => {
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    overlay.id = "futureModal";
+    
+    let cardsHtml = cards.map(c => `
+        <div style="display:inline-block; margin:10px;">
+            <img src="/assets/cards/${c}.png" style="width:80px; border-radius:8px;">
+            <p>${c}</p>
+        </div>
+    `).join("");
+
+    overlay.innerHTML = `
+        <div class="bomb-modal" style="max-width:400px;">
+            <h2>🔮 ดูอนาคต</h2>
+            <div style="margin-bottom:20px;">${cardsHtml}</div>
+            <button class="defuse-btn" onclick="this.parentElement.parentElement.remove()">รับทราบ</button>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+});
+
+/* ===== เปลี่ยนอนาคต (Alter the Future) ===== */
+let tempFutureOrder = [];
+
+socket.on("reorderFuture", (cards) => {
+    tempFutureOrder = [...cards];
+    showAlterModal();
+});
+
+/* ===== GAME OVER LOGIC ===== */
+socket.on("gameOver", (data) => {
+    // สร้าง Overlay แจ้งผู้ชนะ
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    overlay.id = "gameOverModal";
+    overlay.innerHTML = `
+        <div class="bomb-modal" style="border: 4px solid #f1c40f;">
+            <h1 style="font-size: 50px;">🏆</h1>
+            <h2 style="color: #f1c40f; margin-top: 0;">เราได้ผู้ชนะแล้ว!</h2>
+            <p style="font-size: 20px;">🎉 <strong>${data.winnerName}</strong> เป็นผู้รอดชีวิตคนสุดท้าย</p>
+            <button class="defuse-btn" onclick="location.reload()" style="background: #27ae60;">กลับหน้าล็อบบี้</button>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+
+    // ปิดการใช้งานปุ่มทั้งหมดในหน้าจอ
+    document.getElementById("draw").disabled = true;
+    document.getElementById("confirmPlay").classList.add("hidden");
+});
+
+function showAlterModal() {
+    const existing = document.getElementById("alterModal");
+    if (existing) existing.remove();
+
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    overlay.id = "alterModal";
+
+    // ตรวจสอบจำนวนการ์ดจริงที่มีให้เปลี่ยน
+    const cardCount = tempFutureOrder.length;
+
+    let cardsHtml = tempFutureOrder.map((c, i) => `
+        <div style="background:#444; margin:5px; padding:10px; border-radius:10px; display:flex; justify-content:space-between; align-items:center;">
+            <span>${c}</span>
+            <div>
+                <button onclick="window.moveFuture(${i}, -1)" ${i === 0 ? 'disabled' : ''}>⬆️</button>
+                <button onclick="window.moveFuture(${i}, 1)" ${i === cardCount - 1 ? 'disabled' : ''}>⬇️</button>
+            </div>
+        </div>
+    `).join("");
+
+    overlay.innerHTML = `
+        <div class="bomb-modal" style="width:300px;">
+            <h2>🌀 เปลี่ยนอนาคต</h2>
+            <p><small>${cardCount < 3 ? `กองไพ่เหลือเพียง ${cardCount} ใบสุดท้าย` : 'บนสุดคือใบที่จะถูกจั่ว'}</small></p>
+            <div style="text-align:left; margin-bottom:15px;">${cardsHtml}</div>
+            <button class="defuse-btn" onclick="window.submitAlter()">ยืนยันลำดับนี้</button>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+}
+
+// ฟังก์ชันสลับตำแหน่งใน Modal
+window.moveFuture = (index, direction) => {
+    const target = index + direction;
+    
+    // ตรวจสอบว่าเป้าหมายที่จะสลับไปนั้น มีตัวตนอยู่จริงหรือไม่
+    if (target < 0 || target >= tempFutureOrder.length) return;
+
+    // สลับตำแหน่งเฉพาะการ์ดที่มีอยู่จริง
+    const temp = tempFutureOrder[index];
+    tempFutureOrder[index] = tempFutureOrder[target];
+    tempFutureOrder[target] = temp;
+    
+    showAlterModal(); // วาดหน้าต่างใหม่
+};
+
+window.submitAlter = () => {
+    socket.emit("submitFutureOrder", { code: room, order: tempFutureOrder });
+    const modal = document.getElementById("alterModal");
+    if (modal) modal.remove();
+};
+
+/* ===== FUNCTIONS ===== */
+
+function renderHand(roomState) {
+    const me = roomState.players.find(p => p.clientId === clientId);
+    if (!me || !me.alive) {
+        handEl.innerHTML = me ? "<p style='color:red;'>💀 คุณตายแล้ว</p>" : "";
+        return;
+    }
+
+    handEl.innerHTML = "";
+    me.hand.forEach((card, index) => {
+        const btn = document.createElement("button");
+        btn.className = "card-button";
+        btn.style.zIndex = index;
+        if (selectedCardsIdx.includes(index)) btn.classList.add("selected");
+        
+        btn.innerHTML = `
+            <img src="/assets/cards/${card}.png" onerror="this.src='/assets/cards/default.png'">
+            <div style="font-size:10px; margin-top:4px;">${card}</div>
+        `;
+        
+        btn.onclick = () => {
+            const sIdx = selectedCardsIdx.indexOf(index);
+            if (sIdx > -1) selectedCardsIdx.splice(sIdx, 1);
+            else selectedCardsIdx.push(index);
+            renderHand(roomState);
+            validateSelection(roomState);
+        };
+        handEl.appendChild(btn);
+    });
+}
+
+
+/* ===== เลือกเป้าหมาย (Target Picker) ===== */
+
+// ฟังก์ชันส่งคำสั่งไป Server (ต้องมี window. นำหน้าเพื่อให้ HTML เรียกได้)
+window.showDiscardPicker = (pile, selectedCardsIdx) => {
+    const currentPile = lastState ? lastState.discardPile : pile;
+    if (!currentPile || currentPile.length === 0) return alert("กองทิ้งว่างเปล่า");
+
+    // เก็บรายการไพ่ที่จะใช้ไว้ในตัวแปร global ชั่วคราว เพื่อให้ confirmFiveCombo เข้าถึงได้ง่าย
+    const myHand = lastState.players.find(p => p.clientId === clientId).hand;
+    window.tempCardsToUse = selectedCardsIdx.map(idx => myHand[idx]);
+
+    const oldModal = document.getElementById("discardPickerModal");
+    if (oldModal) oldModal.remove();
+
+    const modal = document.createElement("div");
+    modal.id = "discardPickerModal";
+    modal.className = "modal-overlay";
+    Object.assign(modal.style, {
+        position: 'fixed', top: '0', left: '0', width: '100%', height: '100%',
+        backgroundColor: 'rgba(0,0,0,0.85)', zIndex: '10000',
+        display: 'flex', alignItems: 'center', justifyContent: 'center'
+    });
+
+    const uniqueCards = [...new Set(currentPile)];
+
+    modal.innerHTML = `
+        <div class="modal-content" style="background:#222; padding:20px; border-radius:15px; width:90%; max-width:400px; max-height:80vh; display:flex; flex-direction:column;">
+            <h3 style="margin:0 0 15px 0; color:#2ed573; text-align:center;">เลือกการ์ด 1 ใบจากกองทิ้ง</h3>
+            
+            <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:10px; overflow-y:auto; padding:10px; flex-grow:1; background:#111; border-radius:10px;">
+                ${uniqueCards.map(cardName => `
+                    <div style="cursor:pointer; text-align:center; background:#333; padding:5px; border-radius:8px; border:1px solid #444;" 
+                         onclick="window.confirmFiveCombo('${cardName}')">
+                        <img src="/assets/cards/${cardName}.png" 
+                             style="width:100%; aspect-ratio:2/3; object-fit:contain; border-radius:5px; pointer-events:none;"
+                             onerror="this.src='/assets/cards/default.png'">
+                        <div style="font-size:10px; color:white; margin-top:5px; pointer-events:none;">
+                            ${cardName}
+                        </div>
+                    </div>
+                `).join('')}
+            </div>
+            
+            <button onclick="this.closest('.modal-overlay').remove()" 
+                    style="margin-top:15px; padding:12px; background:#ff4757; color:white; border:none; border-radius:8px; cursor:pointer;">
+                ยกเลิก
+            </button>
+        </div>
+    `;
+    document.body.appendChild(modal);
+};
+// ฟังก์ชันที่คุณส่งมา (อัปเดตให้ลบ Modal)
+window.confirmFiveCombo = (requestedCard) => {
+    // ดึงค่าไพ่ 5 ใบที่เราเลือกไว้จากตัวแปรชั่วคราว
+    const cards = window.tempCardsToUse;
+
+    if (!cards || cards.length !== 5) {
+        alert("ข้อมูลการ์ดไม่ถูกต้อง");
+        return;
+    }
+
+    // ส่งข้อมูลไป Server
+    socket.emit("playFiveCombo", { 
+        code: room, 
+        cards: cards, 
+        requestedCard: requestedCard 
+    });
+
+    // ปิด Modal
+    const modal = document.getElementById("discardPickerModal");
+    if (modal) modal.remove();
+    
+    // ล้างสถานะการเลือกไพ่ในมือ
+    selectedCardsIdx = [];
+    window.tempCardsToUse = null;
+    renderHand(lastState);
+};
+
+/* ===== ACTION HANDLERS ===== */
+// ประกาศตัวแปรให้ชัดเจนก่อนใช้งาน
+const confirmPlay = document.getElementById("confirmPlay")
+
+// 1. ตรวจสอบการเลือกไพ่ (ปุ่มจะปรากฏขึ้นเมื่อเงื่อนไขถูกต้อง)
+function validateSelection(roomState) {
+    const btn = elements.confirmPlay; 
+    if (!btn || !roomState) return;
+
+    const me = roomState.players.find(p => p.clientId === clientId);
+    if (!me || !me.alive) {
+        btn.classList.add("hidden");
+        return;
+    }
+
+    const isMyTurn = roomState.players[roomState.turn]?.clientId === clientId;
+    const selectedCards = selectedCardsIdx.map(idx => me.hand[idx]);
+    const count = selectedCards.length;
+
+    let canPlay = false;
+
+    // --- กรณีเล่นในตาตัวเอง ---
+    if (isMyTurn && !roomState.pendingAction) {
+        // Combo 2 ใบ
+        if (count === 2) {
+            const hasWild = selectedCards.includes("แมวแหล");
+            const cats = selectedCards.filter(c => c.startsWith("แมว"));
+            if (cats.length === 2) {
+                if (hasWild) canPlay = true;
+                else if (selectedCards[0] === selectedCards[1]) canPlay = true;
+            }
+        } 
+        // Combo 3 ใบ
+        else if (count === 3) {
+            const cats = selectedCards.filter(c => c.startsWith("แมว"));
+            if (cats.length === 3) {
+                const normalCats = selectedCards.filter(c => c !== "แมวแหล");
+                const allSame = normalCats.length === 0 || normalCats.every(c => c === normalCats[0]);
+                if (allSame) canPlay = true;
+            }
+        }
+        // Combo 5 ใบ (ต้องไม่ซ้ำกัน)
+        else if (count === 5) {
+            const uniqueCount = new Set(selectedCards).size;
+            if (uniqueCount === 5) canPlay = true;
+        }
+        // การ์ดทั่วไปใบเดียว (ยกเว้น ม่าย และ แมว)
+        else if (count === 1) {
+            const card = selectedCards[0];
+            const isNormalCard = !card.startsWith("แมว") && card !== "ม่าย" && card !== "แก้ระเบิด";
+            if (isNormalCard) canPlay = true;
+        }
+    } 
+    
+    // --- กรณีเล่นนอกตา (การ์ด ม่าย) ---
+    // ต้องมี Action ค้างอยู่ และเลือกไพ่ "ม่าย" เพียงใบเดียว
+    if (count === 1 && selectedCards[0] === "ม่าย" && roomState.pendingAction) {
+        // เช็คว่าเป็นคนใช้ Action นั้นเองหรือไม่ (ห้าม Nope ตัวเอง)
+        if (roomState.pendingAction.playerClientId !== clientId) {
+            canPlay = true;
+        }
+    }
+
+    // แสดงผลปุ่ม
+    if (canPlay) {
+        btn.classList.remove("hidden");
+    } else {
+        btn.classList.add("hidden");
+    }
+}
+
+// 2. เมื่อกดปุ่มยืนยัน
+elements.confirmPlay.onclick = () => {
+    if (!lastState) return;
+    const me = lastState.players.find(p => p.clientId === clientId);
+    const selectedCards = selectedCardsIdx.map(idx => me.hand[idx]);
+    
+    if (selectedCards.length === 0) return;
+
+    const cardName = selectedCards[0];
+    const count = selectedCards.length;
+
+    // ส่งข้อมูลตามประเภท Combo
+    if (count === 2) {
+        window.openTargetPicker(2, selectedCardsIdx); 
+    } else if (count === 3) {
+        window.openTargetPicker(3, selectedCardsIdx);
+    } else if (count === 5) {
+        window.showDiscardPicker(lastState.discardPile, selectedCardsIdx);
+    } else {
+        // กรณีเล่นใบเดียว (เช่น ข้าม, โจมตี, ม่าย)
+        socket.emit("playCard", { 
+            code: room, 
+            card: cardName, 
+            useCount: 1 
+        });
+    }
+
+    // ล้างสถานะหลังกด
+    selectedCardsIdx = [];
+    elements.confirmPlay.classList.add("hidden");
+    renderHand(lastState);
+};
+/* ===== ฟังก์ชัน Global สำหรับปุ่มใน Modal ===== */
+window.openTargetPicker = (useCount, selectedCardsIdx) => {
+    const opponents = lastState.players.filter(p => p.clientId !== clientId && p.alive);
+
+    if (opponents.length === 0) {
+        alert("ไม่มีเพื่อนให้ขโมยเลย!");
+        return;
+    }
+
+    const oldModal = document.getElementById("targetPickerModal");
+    if (oldModal) oldModal.remove();
+
+    const modal = document.createElement("div");
+    modal.id = "targetPickerModal";
+    modal.className = "modal-overlay";
+
+    modal.innerHTML = `
+        <div class="modal-content">
+            <h3 style="margin:0 0 15px 0; color:#ffa502; text-align:center;">
+                ${useCount === 2 ? 'เลือกเป้าหมายเพื่อสุ่มขโมย' : 'เลือกเป้าหมายเพื่อระบุชื่อขโมย'}
+            </h3>
+            <div class="picker-grid-small">
+                ${opponents.map(opp => `
+                    <div class="target-item" onclick="confirmSteal('${opp.clientId}', ${useCount}, ${JSON.stringify(selectedCardsIdx)})">
+                        <div class="target-avatar">👤</div>
+                        <div class="target-name">${opp.name}</div>
+                        <div class="target-cards">ถือไพ่ ${opp.hand.length} ใบ</div>
+                    </div>
+                `).join('')}
+            </div>
+            <button onclick="this.closest('.modal-overlay').remove()" class="cancel-btn">ยกเลิก</button>
+        </div>
+    `;
+    document.body.appendChild(modal);
+};
+window.confirmSteal = (targetClientId, useCount, selectedCardsIdx) => {
+    // 1. ปิด Modal ทันทีป้องกันการกดย้ำ
+    const modal = document.getElementById("targetPickerModal");
+    if (modal) modal.remove();
+
+    const me = lastState.players.find(p => p.clientId === clientId);
+    // แปลง Index เป็นรายชื่อการ์ดจริง
+    const cardsUsed = selectedCardsIdx.map(idx => me.hand[idx]);
+    const firstCardName = cardsUsed[0];
+    let mainCard = cardsUsed.find(c => c !== "แมวแหล");
+    
+    // ถ้าเลือกแมวแหลทั้งคู่ (กรณีหายาก) ให้ใช้แมวแหลเป็นชื่อหลัก
+    if (!mainCard) mainCard = "แมวแหล";
+
+    if (useCount === 3) {
+        // ถ้าใช้ 3 ใบ: ไปที่ Modal เลือกชื่อการ์ดต่อ
+        window.openCardTypePicker(targetClientId, cardsUsed);
+    } else {
+        // ถ้าใช้ 2 ใบ: เปลี่ยนจาก playAction เป็น playCard ให้เหมือนจุดอื่นๆ
+        socket.emit("playCard", {
+            code: room,
+            card: mainCard, // ส่งชื่อการ์ดใบแรกเป็นตัวแทนกลุ่ม
+            targetClientId: targetClientId,
+            useCount: 2,         // ระบุให้ Server รู้ว่าเป็น Combo 2 ใบ
+            selectedIndices: selectedCardsIdx // ส่ง Index ไปด้วยเพื่อให้ Server ลบไพ่ถูกใบ
+        });
+        
+        // ล้างสถานะการเลือกหน้าจอ
+        clearSelection();
+    }
+};
+
+function clearSelection() {
+    window.selectedCardsIdx = [];
+    renderHand(lastState);
+}
+// แก้ปัญหา ReferenceError โดยการผูกฟังก์ชันเข้ากับ window
+window.confirmPlayWithTarget = (card, targetId, useCount) => {
+    socket.emit("playCard", { 
+        code: room, 
+        card: card, 
+        targetClientId: targetId, 
+        useCount: useCount 
+    });
+    
+    // ปิด Modal เมื่อส่งคำสั่งเสร็จ
+    const modal = document.getElementById("targetModal");
+    if (modal) modal.remove();
+    
+    // ล้างสถานะการเลือกไพ่บนมือ
+    selectedCardsIdx = [];
+    renderHand(lastState);
+};
+window.openCardTypePicker = (targetClientId, cardsUsed) => {
+    // 1. ปิด Modal อื่นๆ ที่อาจค้างอยู่
+   const oldTargetModal = document.getElementById("targetPickerModal");
+    if (oldTargetModal) oldTargetModal.remove();
+
+    const oldNameModal = document.getElementById("cardNamePickerModal");
+    if (oldNameModal) oldNameModal.remove();
+
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    overlay.id = "cardNamePickerModal";
+
+    // รายชื่อการ์ดที่สามารถระบุชื่อเพื่อขโมยได้
+    const ALL_CARDS = ["ข้าม", "ม่าย", "โจมตี", "สับไพ่", "ดูอนาคต", "จั่วจากใต้กอง", "เปลี่ยนอนาคต", "แก้ระเบิด"];
+
+    // เตรียมการ์ดแมวที่จะส่ง (เอาเฉพาะชื่อใบเดียวเพื่อเป็น ID ของการ์ดกลุ่มนี้)
+    const catCardName = cardsUsed[0];
+
+    let cardsHtml = ALL_CARDS.map(c => `
+        <div class="card-item-picker" onclick="window.executeThreeCombo('${catCardName}', '${targetClientId}', '${c}')">
+           <img src="/assets/cards/${c}.png" 
+     style="width: 70px; height: 100px; object-fit: cover; border-radius: 5px; display: block; margin: 0 auto;"
+     onerror="this.src='/assets/cards/default.png'">
+        </div>
+    `).join("");
+
+    overlay.innerHTML = `
+        <div class="bomb-modal" style="width: 80%; max-width: 400px;">
+            <h3>👑 ระบุชื่อการ์ดที่ต้องการขโมย</h3>
+            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top:15px;">
+                ${cardsHtml}
+            </div>
+            <button class="cancel-btn" style="margin-top:15px;" onclick="this.parentElement.parentElement.remove()">ยกเลิก</button>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+};
+
+window.executeThreeCombo = (cardName, targetId, reqCard) => {
+    // ส่งข้อมูลไปที่ Server
+    socket.emit("playCard", { 
+        code: room, 
+        card: cardName,        // ชื่อการ์ดแมวที่ใช้ (เช่น แมวสีชมพู)
+        targetClientId: targetId, 
+        useCount: 3,           // ระบุว่าเป็น Combo 3 ใบ
+        requestedCard: reqCard // ชื่อการ์ดที่ระบุขโมย (เช่น ข้าม)
+    });
+
+    // ปิด Modal หลังส่งเสร็จ
+    const modal = document.getElementById("cardNamePickerModal");
+    if (modal) modal.remove();
+
+    // ล้างสถานะการเลือกไพ่ในมือ
+    if (typeof clearSelection === "function") {
+        clearSelection();
+    }
+};
+// ปุ่มเริ่มเกม และ ปุ่มจั่ว (ตรวจสอบให้แน่ใจว่าวางไว้นอก socket.on)
+document.getElementById("startGame").onclick = () => socket.emit("startGame", room);
+document.getElementById("draw").onclick = () => socket.emit("drawCard", room);
+document.getElementById("nopeBtn").onclick = () => {
+    socket.emit("playNope", room);
+};
+document.getElementById("sortHand").onclick = () => {
+    if (!lastState) return;
+
+    // 1. ดึงข้อมูลเราจาก State ล่าสุด
+    const me = lastState.players.find(p => p.clientId === clientId);
+    if (!me || !me.hand) return;
+
+    // 2. เรียงลำดับไพ่ใน Array (A-Z)
+    // การใช้ localeCompare ช่วยให้เรียงภาษาไทยและอังกฤษได้ถูกต้อง
+    me.hand.sort((a, b) => a.localeCompare(b, 'th'));
+
+    // 3. ล้างการเลือกไพ่ที่ค้างอยู่ (ป้องกัน Index เพี้ยน)
+    selectedCardsIdx = [];
+
+    // 4. สั่งวาดไพ่ใหม่
+    renderHand(lastState);
+    validateSelection(lastState);
+};
