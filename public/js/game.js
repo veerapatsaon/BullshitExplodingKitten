@@ -650,3 +650,4 @@ document.getElementById("sortHand").onclick = () => {
     validateSelection(lastState);
 
 };
+
