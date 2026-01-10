@@ -270,12 +270,12 @@ socket.on("playCard", ({ code, card, targetClientId, useCount, requestedCard }) 
         card, // ชื่อการ์ดหลักที่ใช้เรียก Action
         targetClientId,
         requestedCard,
-        endAt: Date.now() + 3000 
+        endAt: Date.now() + 7000 
     };
 
     pushLog(room, "system", `⏳ ${player.name} ใช้ Combo แมว x${needed}`);
     io.to(code).emit("state", room);
-    room.nopeTimer = setTimeout(() => resolvePendingAction(code), 3000);
+    room.nopeTimer = setTimeout(() => resolvePendingAction(code), 7000);
 });
 
     socket.on("playNope", code => {
@@ -319,12 +319,12 @@ socket.on("playCard", ({ code, card, targetClientId, useCount, requestedCard }) 
         playerClientId: player.clientId,
         card: "COMBO_5",
         requestedCard: requestedCard,
-        endAt: Date.now() + 3000
+        endAt: Date.now() + 7000
     };
 
     pushLog(room, "system", `⏳ ${player.name} จ่าย 5 ใบไม่ซ้ำเพื่อกู้ชีพ "${requestedCard}"`);
     io.to(code).emit("state", room);
-    room.nopeTimer = setTimeout(() => resolvePendingAction(code), 3000);
+    room.nopeTimer = setTimeout(() => resolvePendingAction(code), 7000);
 });
 socket.on("submitFutureOrder", ({ code, order }) => {
     const room = rooms[code];
